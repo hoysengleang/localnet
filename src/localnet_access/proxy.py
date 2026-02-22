@@ -14,7 +14,7 @@ SHARE_STATE_DIR = Path.home() / ".localnet-access"
 
 
 @dataclass
-class SharedService: 
+class SharedService:
       name         : str
       target_host  : str
       target_port  : int

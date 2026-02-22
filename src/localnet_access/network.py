@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class NetworkInfo: 
+class NetworkInfo:
       hostname   : str
       local_ip   : str
       interfaces : list[dict[str, str]]
