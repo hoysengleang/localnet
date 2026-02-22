@@ -6,10 +6,10 @@ from dataclasses import dataclass
 
 
 @dataclass
-class NetworkInfo:
-    hostname: str
-    local_ip: str
-    interfaces: list[dict[str, str]]
+class NetworkInfo: 
+      hostname   : str
+      local_ip   : str
+      interfaces : list[dict[str, str]]
 
 
 def get_local_ip() -> str:

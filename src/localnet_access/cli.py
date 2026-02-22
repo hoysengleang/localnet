@@ -92,16 +92,16 @@ def cmd_share(args: argparse.Namespace) -> None:
     share_url = f"http://{local_ip}:{listen_port}"
 
     service = SharedService(
-        name=name,
-        target_host=target_host,
-        target_port=target_port,
-        listen_port=listen_port,
-        local_ip=local_ip,
-        pid=os.getpid(),
-        started_at=datetime.now().isoformat(timespec="seconds"),
-        share_url=share_url,
-        allow_rules=[str(r) for r in acl.allow_rules],
-        deny_rules=[str(r) for r in acl.deny_rules],
+        name        = name,
+        target_host = target_host,
+        target_port = target_port,
+        listen_port = listen_port,
+        local_ip    = local_ip,
+        pid         = os.getpid(),
+        started_at  = datetime.now().isoformat(timespec="seconds"),
+        share_url   = share_url,
+        allow_rules = [str(r) for r in acl.allow_rules],
+        deny_rules  = [str(r) for r in acl.deny_rules],
     )
 
     save_service(service)
