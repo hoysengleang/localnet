@@ -8,9 +8,38 @@ from rich.table import Table
 from rich.text import Text
 
 from localnet_access.acl import AccessControl
-from localnet_access.proxy import SharedService
+from localnet_access.proxy import HttpEntry, SharedService
+from localnet_access.scanner import RemoteShare
 
 console = Console()
+
+_STATUS_STYLE: dict[int, str] = {}
+
+
+def _status_style(code: int) -> str:
+    if code == 0:
+        return "dim"
+    if code < 200:
+        return "dim"
+    if code < 300:
+        return "bold green"
+    if code < 400:
+        return "cyan"
+    if code < 500:
+        return "bold yellow"
+    return "bold red"
+
+
+def _method_style(method: str) -> str:
+    return {
+        "GET": "green",
+        "POST": "bold cyan",
+        "PUT": "yellow",
+        "PATCH": "yellow",
+        "DELETE": "bold red",
+        "HEAD": "dim",
+        "OPTIONS": "dim",
+    }.get(method.upper(), "white")
 
 
 def print_banner() -> None:
@@ -37,6 +66,12 @@ def print_share_info(
     table.add_row("Share URL", f"[bold green]{service.share_url}[/bold green]")
     table.add_row("PID", str(service.pid))
 
+    if service.token:
+        table.add_row("Token", f"[bold yellow]{service.token}[/bold yellow]")
+
+    if service.http_log:
+        table.add_row("HTTP Log", "[bold cyan]enabled[/bold cyan]")
+
     if acl and acl.is_restricted:
         table.add_row("", "")
         table.add_row("Access", f"[bold yellow]{acl.policy.value.upper()}[/bold yellow]")
@@ -56,13 +91,45 @@ def print_share_info(
     if show_qr:
         _print_qr(service.share_url)
 
-    if acl and acl.is_restricted:
-        console.print()
+    console.print()
+    if service.http_log:
+        _print_http_log_header()
+    elif acl and acl.is_restricted:
         console.print("  [dim]Connection log:[/dim]")
 
     console.print()
     console.print("  [dim]Press Ctrl+C to stop sharing[/dim]")
     console.print()
+
+
+def _print_http_log_header() -> None:
+    header = (
+        f"  {'TIME':<10} {'IP':<16} {'METHOD':<8} {'PATH':<40} {'STATUS':<8} {'MS':>6}"
+    )
+    console.print(f"[dim]{header}[/dim]")
+    console.print(f"  [dim]{'─' * 90}[/dim]")
+
+
+def print_http_entry(entry: HttpEntry) -> None:
+    """Print one HTTP request log line — called live from the proxy callback."""
+    from datetime import datetime
+
+    ts = datetime.now().strftime("%H:%M:%S")
+    method_s = f"[{_method_style(entry.method)}]{entry.method:<7}[/{_method_style(entry.method)}]"
+    status_s = f"[{_status_style(entry.status)}]{entry.status}[/{_status_style(entry.status)}]"
+
+
+    path = entry.path if len(entry.path) <= 40 else entry.path[:37] + "..."
+
+    if entry.duration_ms > 0:
+        ms_s = f"[dim]{entry.duration_ms:>5.0f}ms[/dim]"
+    else:
+        ms_s = "[dim]   —  [/dim]"
+
+    console.print(
+        f"  [dim]{ts}[/dim]  [dim]{entry.client_ip:<16}[/dim]  "
+        f"{method_s}  [white]{path:<40}[/white]  {status_s}  {ms_s}"
+    )
 
 
 def _print_qr(url: str) -> None:
@@ -82,7 +149,6 @@ def _print_qr(url: str) -> None:
             for cell in row:
                 content.append("  ", style="on black" if cell else "on white")
             content.append("\n")
-
 
         content.append(f"\n  {url}\n", style="bold green")
 
@@ -110,14 +176,17 @@ def print_services_table(services: list[SharedService]) -> None:
     table.add_column("Listen Port", justify="center")
     table.add_column("Share URL", style="green")
     table.add_column("Access", justify="center")
+    table.add_column("Token", justify="center")
     table.add_column("PID", justify="center", style="dim")
 
     for svc in services:
         if svc.allow_rules or svc.deny_rules:
-            n_rules = len(svc.allow_rules) + len(svc.deny_rules)
-            access_str = f"[yellow]{n_rules} rule{'s' if n_rules != 1 else ''}[/yellow]"
+            n = len(svc.allow_rules) + len(svc.deny_rules)
+            access_str = f"[yellow]{n} rule{'s' if n != 1 else ''}[/yellow]"
         else:
             access_str = "[dim]open[/dim]"
+
+        token_str = "[bold yellow]yes[/bold yellow]" if svc.token else "[dim]—[/dim]"
 
         table.add_row(
             svc.name,
@@ -125,8 +194,34 @@ def print_services_table(services: list[SharedService]) -> None:
             str(svc.listen_port),
             svc.share_url,
             access_str,
+            token_str,
             str(svc.pid),
         )
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def print_scan_results(shares: list[RemoteShare]) -> None:
+    """Print discovered LAN shares from `localnet scan`."""
+    if not shares:
+        console.print("\n  [yellow]No other localnet-access instances found on your network.[/yellow]")
+        console.print("  [dim]Make sure others are running `localnet share` on the same LAN.[/dim]\n")
+        return
+
+    table = Table(
+        title=f"[bold cyan]Found {len(shares)} share{'s' if len(shares) != 1 else ''} on your network[/bold cyan]",
+        box=box.ROUNDED,
+        border_style="cyan",
+    )
+    table.add_column("IP", style="dim")
+    table.add_column("Name", style="bold")
+    table.add_column("Share URL", style="bold green")
+    table.add_column("Port", justify="center", style="dim")
+
+    for s in shares:
+        table.add_row(s.ip, s.name, s.share_url, str(s.listen_port))
 
     console.print()
     console.print(table)

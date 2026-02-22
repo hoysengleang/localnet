@@ -13,7 +13,9 @@ from localnet_access.display import (
     console,
     print_banner,
     print_error,
+    print_http_entry,
     print_network_info,
+    print_scan_results,
     print_services_table,
     print_share_info,
     print_success,
@@ -26,12 +28,14 @@ from localnet_access.network import (
     parse_target,
 )
 from localnet_access.proxy import (
+    HttpEntry,
     SharedService,
     cleanup_dead_services,
     remove_service,
     run_proxy,
     save_service,
 )
+from localnet_access.scanner import broadcast_presence, scan_lan
 
 
 def _build_acl(args: argparse.Namespace) -> AccessControl:
@@ -57,6 +61,10 @@ def _on_connection(ip: str, allowed: bool) -> None:
         console.print(f"  [dim]{ts}[/dim]  [bold red]DENY [/bold red]  {ip}")
 
 
+def _on_http(entry: HttpEntry) -> None:
+    print_http_entry(entry)
+
+
 def cmd_share(args: argparse.Namespace) -> None:
     target_host, target_port = parse_target(args.target)
 
@@ -67,12 +75,7 @@ def cmd_share(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    if args.port:
-        listen_port = args.port
-    elif args.expose:
-        listen_port = target_port
-    else:
-        listen_port = target_port
+    listen_port = args.port if args.port else target_port
 
     if is_port_in_use(listen_port, "0.0.0.0") and listen_port != target_port:
         print_error(f"Port {listen_port} is already in use. Try a different port with --port.")
@@ -86,34 +89,55 @@ def cmd_share(args: argparse.Namespace) -> None:
         listen_port = alt
 
     acl = _build_acl(args)
+    token: str = args.token or ""
+    http_log: bool = args.http_log
 
     local_ip = get_local_ip()
     name = args.name or f"service-{target_port}"
     share_url = f"http://{local_ip}:{listen_port}"
 
     service = SharedService(
-        name        = name,
-        target_host = target_host,
-        target_port = target_port,
-        listen_port = listen_port,
-        local_ip    = local_ip,
-        pid         = os.getpid(),
-        started_at  = datetime.now().isoformat(timespec="seconds"),
-        share_url   = share_url,
-        allow_rules = [str(r) for r in acl.allow_rules],
-        deny_rules  = [str(r) for r in acl.deny_rules],
+        name=name,
+        target_host=target_host,
+        target_port=target_port,
+        listen_port=listen_port,
+        local_ip=local_ip,
+        pid=os.getpid(),
+        started_at=datetime.now().isoformat(timespec="seconds"),
+        share_url=share_url,
+        allow_rules=[str(r) for r in acl.allow_rules],
+        deny_rules=[str(r) for r in acl.deny_rules],
+        token=token,
+        http_log=http_log,
     )
 
     save_service(service)
     print_banner()
     print_share_info(service, acl=acl, show_qr=not args.no_qr)
 
+    # Build the share payload for UDP broadcast
+    share_beacon = [{"name": name, "share_url": share_url, "listen_port": listen_port}]
+
+    async def _run() -> None:
+        broadcast_task = asyncio.create_task(broadcast_presence(share_beacon))
+        try:
+            await run_proxy(
+                target_host, target_port, listen_port,
+                acl=acl,
+                token=token,
+                http_log=http_log,
+                on_connection=_on_connection if not http_log else None,
+                on_http=_on_http if http_log else None,
+            )
+        finally:
+            broadcast_task.cancel()
+            try:
+                await broadcast_task
+            except asyncio.CancelledError:
+                pass
+
     try:
-        asyncio.run(run_proxy(
-            target_host, target_port, listen_port,
-            acl=acl,
-            on_connection=_on_connection,
-        ))
+        asyncio.run(_run())
     except KeyboardInterrupt:
         pass
     finally:
@@ -155,6 +179,13 @@ def cmd_info(args: argparse.Namespace) -> None:
     print_network_info(info.hostname, info.local_ip, info.interfaces)
 
 
+def cmd_scan(args: argparse.Namespace) -> None:
+    print_banner()
+    console.print(f"\n  [dim]Scanning your network for localnet-access shares ({args.timeout}s)...[/dim]\n")
+    shares = scan_lan(timeout=args.timeout)
+    print_scan_results(shares)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="localnet",
@@ -164,7 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", title="commands")
 
-    # --- share ---
+    # ── share ──────────────────────────────────────────────────────────────
     p_share = sub.add_parser(
         "share",
         help="Share a local service on the network",
@@ -174,53 +205,59 @@ def build_parser() -> argparse.ArgumentParser:
         "target",
         help="Port number or host:port to share (e.g. 3000, localhost:8080)",
     )
+    p_share.add_argument("-p", "--port", type=int, default=None,
+                         help="Custom listen port (default: same as target)")
+    p_share.add_argument("-n", "--name", default=None,
+                         help="Friendly name for this share")
+    p_share.add_argument("--expose", action="store_true",
+                         help="Use the same port as the target")
+    p_share.add_argument("--no-qr", action="store_true",
+                         help="Don't show QR code")
     p_share.add_argument(
-        "-p", "--port",
-        type=int,
-        default=None,
-        help="Custom port to listen on (default: same as target)",
+        "--allow", action="append", metavar="IP",
+        help="Only allow this IP or CIDR (repeatable)",
     )
     p_share.add_argument(
-        "-n", "--name",
-        default=None,
-        help="Friendly name for this share",
+        "--deny", action="append", metavar="IP",
+        help="Block this IP or CIDR (repeatable)",
     )
     p_share.add_argument(
-        "--expose",
-        action="store_true",
-        help="Use the same port as the target",
+        "--token", default=None, metavar="SECRET",
+        help=(
+            "Require this token on every HTTP request. "
+            "Clients must send 'Authorization: Bearer <token>' or '?token=<token>'"
+        ),
     )
     p_share.add_argument(
-        "--no-qr",
-        action="store_true",
-        help="Don't show QR code",
-    )
-    p_share.add_argument(
-        "--allow",
-        action="append",
-        metavar="IP",
-        help="Only allow this IP or CIDR (repeatable). Example: --allow 192.168.0.10 --allow 10.0.0.0/24",
-    )
-    p_share.add_argument(
-        "--deny",
-        action="append",
-        metavar="IP",
-        help="Block this IP or CIDR (repeatable). Example: --deny 192.168.0.50 --deny 172.16.0.0/12",
+        "--http-log", action="store_true",
+        help="Show live HTTP request log (method, path, status, latency)",
     )
     p_share.set_defaults(func=cmd_share)
 
-    # --- list ---
+    # ── list ───────────────────────────────────────────────────────────────
     p_list = sub.add_parser("list", help="List all active shares")
     p_list.set_defaults(func=cmd_list)
 
-    # --- stop ---
+    # ── stop ───────────────────────────────────────────────────────────────
     p_stop = sub.add_parser("stop", help="Stop an active share")
     p_stop.add_argument("target", help="Port number or name of the share to stop")
     p_stop.set_defaults(func=cmd_stop)
 
-    # --- info ---
+    # ── info ───────────────────────────────────────────────────────────────
     p_info = sub.add_parser("info", help="Show network information")
     p_info.set_defaults(func=cmd_info)
+
+    # ── scan ───────────────────────────────────────────────────────────────
+    p_scan = sub.add_parser(
+        "scan",
+        help="Discover other localnet-access shares on your network",
+        description="Broadcasts a UDP probe and lists all responding localnet-access instances.",
+    )
+    p_scan.add_argument(
+        "--timeout", type=float, default=2.0, metavar="SECS",
+        help="How long to wait for replies (default: 2s)",
+    )
+    p_scan.set_defaults(func=cmd_scan)
 
     return parser
 
