@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localnet-access"
+version = "0.1.0"
+description = "Instantly share local dev services with anyone on your network"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "qrcode>=7.4",
+    "rich>=13.0",
+]
+
+[project.scripts]
+localnet = "localnet_access.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
