@@ -8,13 +8,12 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from localnet_access.acl import AccessControl
 
 SHARE_STATE_DIR = Path.home() / ".localnet-access"
 
-# Sentinel returned when the request is not HTTP (e.g. raw TCP / WebSocket upgrade)
 _NOT_HTTP = object()
 
 

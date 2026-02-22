@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class ScannerPolicyEnum(Enum):
     DISCOVERY_PORT  = 54321
     DISCOVERY_MAGIC = b"LOCALNET-ACCESS-BEACON-V1"
