@@ -2,15 +2,8 @@ from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass, field
-from enum import Enum
 
-
-class Policy(Enum):
-    ALLOW_ALL = "allow_all"
-    WHITELIST = "whitelist"
-    BLACKLIST = "blacklist"
-
-
+from localnet_access.Policy.PolicyAcl import PolicyAcl as Policy
 @dataclass
 class AccessControl:
     """Evaluate whether a connecting IP should be allowed or denied.
@@ -65,7 +58,7 @@ class AccessControl:
         return not in_deny
 
     def describe_rules(self) -> list[str]:
-        """Human-readable summary of active rules."""
+        
         lines: list[str] = []
         for net in self.allow_rules:
             lines.append(f"allow {net}")

@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations, print_function
 
 import argparse
 import asyncio
