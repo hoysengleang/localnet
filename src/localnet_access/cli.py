@@ -9,29 +9,28 @@ from datetime import datetime
 
 from localnet_access import __version__
 from localnet_access.acl import AccessControl, parse_acl_rule
+from localnet_access.display import (
+    console,
+    print_banner,
+    print_error,
+    print_network_info,
+    print_services_table,
+    print_share_info,
+    print_success,
+)
 from localnet_access.network import (
+    find_free_port,
     get_local_ip,
     get_network_info,
     is_port_in_use,
-    find_free_port,
     parse_target,
 )
 from localnet_access.proxy import (
     SharedService,
+    cleanup_dead_services,
+    remove_service,
     run_proxy,
     save_service,
-    remove_service,
-    load_services,
-    cleanup_dead_services,
-)
-from localnet_access.display import (
-    console,
-    print_banner,
-    print_share_info,
-    print_services_table,
-    print_network_info,
-    print_error,
-    print_success,
 )
 
 

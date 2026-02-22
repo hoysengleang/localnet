@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from rich import box
 from rich.align import Align
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich import box
 
 from localnet_access.acl import AccessControl
 from localnet_access.proxy import SharedService
