@@ -91,11 +91,11 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
 
 
 async def _handle_client(
-  client_reader: asyncio.StreamReader,
-  client_writer: asyncio.StreamWriter,
-  target_host  : str,
-  target_port  : int,
-) -> None      : 
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+    target_host: str,
+    target_port: int,
+) -> None:
     try:
         upstream_reader, upstream_writer = await asyncio.wait_for(
             asyncio.open_connection(target_host, target_port),
@@ -119,7 +119,12 @@ async def run_proxy(
     on_connection: Callable[[str, bool], None] | None = None,
     on_ready: asyncio.Future | None = None,
 ) -> None:
+    """Start the proxy and run until cancelled.
 
+    Args:
+        acl: Access control rules. None means allow all.
+        on_connection: Optional callback(ip, allowed) for live logging.
+    """
     acl = acl or AccessControl()
 
     async def handler(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
