@@ -53,7 +53,7 @@ def _state_file() -> Path:
 
 
 def save_service(service: SharedService) -> None:
-    path = _state_file()
+    path     = _state_file()
     services = load_services()
     services = [s for s in services if s.listen_port != service.listen_port]
     services.append(service)
@@ -177,12 +177,10 @@ def _check_token(raw_request: bytes, token: str) -> bool:
     if not token:
         return True
 
-    # Check Authorization header
     auth = _get_header(raw_request, "Authorization")
     if auth and auth == f"Bearer {token}":
         return True
 
-    # Check query string
     try:
         first_line = raw_request.split(b"\r\n", 1)[0].decode("latin-1")
         raw_path = first_line.split(" ", 2)[1]

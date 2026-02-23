@@ -122,11 +122,11 @@ def cmd_share(args: argparse.Namespace) -> None:
         try:
             await run_proxy(
                 target_host, target_port, listen_port,
-                acl=acl,
-                token=token,
-                http_log=http_log,
-                on_connection=_on_connection if not http_log else None,
-                on_http=_on_http if http_log else None,
+                acl           = acl,
+                token         = token,
+                http_log      = http_log,
+                on_connection = _on_connection if not http_log else None,
+                on_http       = _on_http if http_log else None,
             )
         finally:
             broadcast_task.cancel()

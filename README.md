@@ -6,10 +6,10 @@
 
 No tunneling. No cloud. No configuration. Just one command.
 
+[![PyPI](https://img.shields.io/pypi/v/localnet-access?color=blue)](https://pypi.org/project/localnet-access/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux-green)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-orange)](pyproject.toml)
 
 </div>
 

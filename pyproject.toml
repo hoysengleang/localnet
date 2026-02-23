@@ -5,10 +5,39 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "localnet-access"
 version = "0.1.0"
-description = "Instantly share local dev services with anyone on your network"
+description = "Share local dev servers on your LAN — no tunnel, no config. TCP proxy with QR code, HTTP log, token auth."
 readme = "README.md"
-requires-python = ">=3.9"
 license = {text = "MIT"}
+requires-python = ">=3.9"
+keywords = [
+    "local",
+    "development",
+    "proxy",
+    "share",
+    "localhost",
+    "lan",
+    "network",
+    "tcp",
+    "dev-tools",
+    "qr-code",
+]
+authors = [
+    {name = "hoysengleang", email = "hoysengleang@users.noreply.github.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Networking",
+]
 dependencies = [
     "qrcode>=7.4",
     "rich>=13.0",
@@ -19,7 +48,9 @@ localnet = "localnet_access.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/hoysengleang/localnet"
+Documentation = "https://github.com/hoysengleang/localnet#readme"
 Repository = "https://github.com/hoysengleang/localnet"
+Changelog = "https://github.com/hoysengleang/localnet/blob/main/CHANGELOG.md"
 Issues = "https://github.com/hoysengleang/localnet/issues"
 
 [project.optional-dependencies]
