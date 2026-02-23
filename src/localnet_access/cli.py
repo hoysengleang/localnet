@@ -114,8 +114,7 @@ def cmd_share(args: argparse.Namespace) -> None:
     save_service(service)
     print_banner()
     print_share_info(service, acl=acl, show_qr=not args.no_qr)
-
-    # Build the share payload for UDP broadcast
+    
     share_beacon = [{"name": name, "share_url": share_url, "listen_port": listen_port}]
 
     async def _run() -> None:

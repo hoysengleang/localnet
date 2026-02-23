@@ -143,6 +143,17 @@ def _parse_status_line(first_bytes: bytes) -> int | None:
     return None
 
 
+def _get_content_length(raw: bytes) -> int | None:
+    """Extract Content-Length from headers. Returns None if absent."""
+    val = _get_header(raw, "Content-Length")
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except ValueError:
+        return None
+
+
 def _get_header(raw: bytes, name: str) -> str | None:
     """Extract a header value from raw HTTP bytes (case-insensitive)."""
     try:
@@ -198,8 +209,82 @@ def _build_401_response() -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# HTTP request/response reading
+# ---------------------------------------------------------------------------
+
+
+async def _read_one_http_request(reader: asyncio.StreamReader, buf: bytearray) -> bytes | None:
+    """Read one complete HTTP request from reader, using buf as scratch.
+    Returns the full request bytes, or None if connection closed / not HTTP.
+    """
+    while True:
+        chunk = await reader.read(8192)
+        if not chunk:
+            return None
+        buf.extend(chunk)
+
+        # Need at least request line + \r\n\r\n
+        header_end = buf.find(b"\r\n\r\n")
+        if header_end == -1:
+            if len(buf) > 65536:
+                return None
+            continue
+
+        header_block = bytes(buf[: header_end + 4])
+        parsed = _parse_request_line(header_block)
+        if not parsed:
+            return None
+
+        body_len = _get_content_length(header_block)
+        total = header_end + 4 + (body_len or 0)
+        while len(buf) < total:
+            extra = await reader.read(total - len(buf))
+            if not extra:
+                break
+            buf.extend(extra)
+
+        request = bytes(buf[:total])
+        del buf[:total]
+        return request
+
+
+async def _read_one_http_response(reader: asyncio.StreamReader, buf: bytearray) -> tuple[bytes, int, float] | None:
+    """Read one complete HTTP response. Returns (full_response_bytes, status_code, duration_ms) or None."""
+    t_start = time.monotonic()
+    while True:
+        chunk = await reader.read(65536)
+        if chunk:
+            buf.extend(chunk)
+        elif not buf:
+            return None
+
+        header_end = buf.find(b"\r\n\r\n")
+        if header_end == -1:
+            if len(buf) > 65536:
+                return None
+            continue
+
+        header_block = bytes(buf[: header_end + 4])
+        status = _parse_status_line(header_block) or 0
+        body_len = _get_content_length(header_block)
+        total = header_end + 4 + (body_len if body_len is not None else 0)
+        while len(buf) < total:
+            extra = await reader.read(total - len(buf))
+            if not extra:
+                total = len(buf)
+                break
+            buf.extend(extra)
+
+        response = bytes(buf[:total])
+        del buf[:total]
+        duration = (time.monotonic() - t_start) * 1000
+        return (response, status, duration)
+
+
+# ---------------------------------------------------------------------------
 # HTTP-aware client handler
 # ---------------------------------------------------------------------------
+
 
 async def _handle_http_client(
     client_reader: asyncio.StreamReader,
@@ -209,84 +294,77 @@ async def _handle_http_client(
     token: str,
     on_http: Callable[[HttpEntry], None] | None,
 ) -> None:
-    """Handle a connection with HTTP parsing, token check, and request logging."""
-    # Peek at the first chunk — enough to read the request line + headers
-    try:
-        first_chunk = await asyncio.wait_for(client_reader.read(8192), timeout=5)
-    except asyncio.TimeoutError:
-        client_writer.close()
-        return
+    """Handle a connection with HTTP parsing, token check, and per-request logging.
+    Supports keep-alive: logs every request/response pair on the connection.
+    """
+    client_ip = "unknown"
+    peer = client_writer.get_extra_info("peername")
+    if peer:
+        client_ip = peer[0]
 
-    if not first_chunk:
-        client_writer.close()
-        return
+    client_buf: bytearray = bytearray()
 
-    parsed = _parse_request_line(first_chunk)
+    while True:
+        request = await _read_one_http_request(client_reader, client_buf)
+        if not request:
+            break
 
-    # Token check — only for HTTP traffic
-    if token and parsed:
-        if not _check_token(first_chunk, token):
+        parsed = _parse_request_line(request)
+        if not parsed:
+            if on_http:
+                on_http(HttpEntry(client_ip, "???", "(non-HTTP, e.g. HTTPS)", 0, 0.0))
+            # Non-HTTP — pipe remainder of connection and exit
+            client_writer.write(request)
+            await client_writer.drain()
+            while True:
+                chunk = await client_reader.read(65536)
+                if not chunk:
+                    break
+                client_writer.write(chunk)
+                await client_writer.drain()
+            break
+
+        method, path = parsed
+
+        if token and not _check_token(request, token):
             client_writer.write(_build_401_response())
             await client_writer.drain()
-            client_writer.close()
-            # Log the rejected request
             if on_http:
-                client_ip = client_writer.get_extra_info("peername")
-                ip = client_ip[0] if client_ip else "unknown"
-                method, path = parsed
-                on_http(HttpEntry(ip, method, path, 401, 0.0))
-            return
+                on_http(HttpEntry(client_ip, method, path, 401, 0.0))
+            continue
 
-    # Connect upstream
+        try:
+            upstream_reader, upstream_writer = await asyncio.wait_for(
+                asyncio.open_connection(target_host, target_port),
+                timeout=5,
+            )
+        except (OSError, asyncio.TimeoutError):
+            break
+
+        try:
+            upstream_writer.write(request)
+            await upstream_writer.drain()
+
+            upstream_buf: bytearray = bytearray()
+            result = await _read_one_http_response(upstream_reader, upstream_buf)
+            if result is None:
+                break
+            response, status, duration = result
+
+            if on_http:
+                on_http(HttpEntry(client_ip, method, path, status, duration))
+
+            client_writer.write(response)
+            await client_writer.drain()
+
+            upstream_writer.close()
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
     try:
-        upstream_reader, upstream_writer = await asyncio.wait_for(
-            asyncio.open_connection(target_host, target_port),
-            timeout=5,
-        )
-    except (OSError, asyncio.TimeoutError):
         client_writer.close()
-        return
-
-    # Forward the already-read first chunk upstream
-    upstream_writer.write(first_chunk)
-    await upstream_writer.drain()
-
-    if parsed and on_http:
-        # Read the first chunk of the response to get the status code
-        t_start = time.monotonic()
-        method, path = parsed
-        client_ip = client_writer.get_extra_info("peername")
-        ip = client_ip[0] if client_ip else "unknown"
-
-        async def _log_response_and_pipe() -> None:
-            logged = False
-            try:
-                while True:
-                    data = await upstream_reader.read(65536)
-                    if not data:
-                        break
-                    if not logged:
-                        status = _parse_status_line(data) or 0
-                        duration = (time.monotonic() - t_start) * 1000
-                        on_http(HttpEntry(ip, method, path, status, duration))
-                        logged = True
-                    client_writer.write(data)
-                    await client_writer.drain()
-            except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
-                pass
-            finally:
-                client_writer.close()
-
-        await asyncio.gather(
-            _log_response_and_pipe(),
-            _pipe(client_reader, upstream_writer),
-        )
-    else:
-        # Non-HTTP or no logging — plain bidirectional pipe
-        await asyncio.gather(
-            _pipe(client_reader, upstream_writer),
-            _pipe(upstream_reader, client_writer),
-        )
+    except OSError:
+        pass
 
 
 async def _handle_plain_client(
