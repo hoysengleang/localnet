@@ -206,7 +206,7 @@ def print_services_table(services: list[SharedService]) -> None:
 def print_scan_results(shares: list[RemoteShare]) -> None:
     """Print discovered LAN shares from `localnet scan`."""
     if not shares:
-        console.print("\n  [yellow]No other localnet-access instances found on your network.[/yellow]")
+        console.print("\n  [yellow]No other localnet-control instances found on your network.[/yellow]")
         console.print("  [dim]Make sure others are running `localnet share` on the same LAN.[/dim]\n")
         return
 

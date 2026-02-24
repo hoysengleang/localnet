@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from localnet_access.acl import AccessControl
 
-SHARE_STATE_DIR = Path.home() / ".localnet-access"
+SHARE_STATE_DIR = Path.home() / ".localnet-control"
 
 _NOT_HTTP = object()
 
@@ -199,7 +199,7 @@ def _build_401_response() -> bytes:
     return (
         b"HTTP/1.1 401 Unauthorized\r\n"
         b"Content-Type: application/json\r\n"
-        b"WWW-Authenticate: Bearer realm=\"localnet-access\"\r\n"
+        b"WWW-Authenticate: Bearer realm=\"localnet-control\"\r\n"
         b"Connection: close\r\n"
         b"Content-Length: " + str(len(body)).encode() + b"\r\n"
         b"\r\n" + body

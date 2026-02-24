@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **list** — Show all active shares
 - **stop** — Stop a share by port or name
 - **info** — Display network info (hostname, IP, interfaces)
-- **scan** — Discover other localnet-access instances on the LAN
+- **scan** — Discover other localnet-control instances on the LAN
 - QR code display for easy mobile access
 - IP/CIDR access control (`--allow`, `--deny`)
 - Token auth (`--token`) — clients use `?token=` or `Authorization: Bearer`

@@ -1,4 +1,4 @@
-"""LAN discovery: broadcast presence and scan for other localnet-access instances."""
+"""LAN discovery: broadcast presence and scan for other localnet-control instances."""
 
 from __future__ import annotations
 

@@ -33,4 +33,4 @@ htmlcov/
 Thumbs.db
 
 # localnet runtime state
-~/.localnet-access/
+~/.localnet-control/

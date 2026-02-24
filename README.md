@@ -1,12 +1,12 @@
 <div align="center">
 
-# localnet-access
+# localnet-control
 
 **Instantly share local dev services with anyone on your network.**
 
 No tunneling. No cloud. No configuration. Just one command.
 
-[![PyPI](https://img.shields.io/pypi/v/localnet-access?color=blue)](https://pypi.org/project/localnet-access/)
+[![PyPI](https://img.shields.io/pypi/v/localnet-control?color=blue)](https://pypi.org/project/localnet-control/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux-green)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -21,7 +21,7 @@ No tunneling. No cloud. No configuration. Just one command.
 
 ## What is it?
 
-`localnet-access` creates a lightweight **TCP proxy** that exposes your local dev service to every device on your LAN — no internet required.
+`localnet-control` creates a lightweight **TCP proxy** that exposes your local dev service to every device on your LAN — no internet required.
 
 ```
 Your app (localhost:3000)
@@ -36,7 +36,7 @@ Your app (localhost:3000)
 ## Install
 
 ```bash
-pip install localnet-access
+pip install localnet-control
 ```
 
 Or install from source (for development):
@@ -128,7 +128,7 @@ localnet stop my-api     # stop by name
 localnet scan
 ```
 
-Finds other localnet-access instances running on your LAN. Great for teams.
+Finds other localnet-control instances running on your LAN. Great for teams.
 
 ---
 
@@ -148,7 +148,7 @@ Displays your hostname, primary LAN IP, and all network interfaces.
 2. **Binds to `0.0.0.0`** on the chosen port so all network interfaces are reachable
 3. **Proxies TCP traffic** bidirectionally between LAN clients and your local service
 4. **Prints a shareable URL** and QR code so anyone can connect instantly
-5. **Saves state** to `~/.localnet-access/services.json` to track active shares
+5. **Saves state** to `~/.localnet-control/services.json` to track active shares
 6. **Broadcasts presence** via UDP so `localnet scan` can discover other instances
 
 ---
@@ -183,7 +183,7 @@ Displays your hostname, primary LAN IP, and all network interfaces.
 
 1. **Create a PyPI account:** https://pypi.org/account/register/
 2. **Set up Trusted Publishing:** PyPI → Account Settings → Publishing → Add pending publisher:
-   - PyPI project: `localnet-access`
+   - PyPI project: `localnet-control`
    - Owner: `hoysengleang`, Repo: `localnet`
    - Workflow: `release.yml`
 3. **Bump version** in `pyproject.toml` and `src/localnet_access/__init__.py`

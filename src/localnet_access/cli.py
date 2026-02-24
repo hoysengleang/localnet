@@ -180,7 +180,7 @@ def cmd_info(args: argparse.Namespace) -> None:
 
 def cmd_scan(args: argparse.Namespace) -> None:
     print_banner()
-    console.print(f"\n  [dim]Scanning your network for localnet-access shares ({args.timeout}s)...[/dim]\n")
+    console.print(f"\n  [dim]Scanning your network for localnet-control shares ({args.timeout}s)...[/dim]\n")
     shares = scan_lan(timeout=args.timeout)
     print_scan_results(shares)
 
@@ -249,8 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
     # ── scan ───────────────────────────────────────────────────────────────
     p_scan = sub.add_parser(
         "scan",
-        help="Discover other localnet-access shares on your network",
-        description="Broadcasts a UDP probe and lists all responding localnet-access instances.",
+        help="Discover other localnet-control shares on your network",
+        description="Broadcasts a UDP probe and lists all responding localnet-control instances.",
     )
     p_scan.add_argument(
         "--timeout", type=float, default=2.0, metavar="SECS",
