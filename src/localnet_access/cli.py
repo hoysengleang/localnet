@@ -36,6 +36,7 @@ from localnet_access.proxy import (
     save_service,
 )
 from localnet_access.scanner import broadcast_presence, scan_lan
+from localnet_access.tunnel import TunnelError, start_cloudflare_tunnel
 
 
 def _build_acl(args: argparse.Namespace) -> AccessControl:
@@ -94,7 +95,7 @@ def cmd_share(args: argparse.Namespace) -> None:
 
     local_ip = get_local_ip()
     name = args.name or f"service-{target_port}"
-    share_url = f"http://{local_ip}:{listen_port}"
+    local_share_url = f"http://{local_ip}:{listen_port}"
 
     service = SharedService(
         name=name,
@@ -104,44 +105,84 @@ def cmd_share(args: argparse.Namespace) -> None:
         local_ip=local_ip,
         pid=os.getpid(),
         started_at=datetime.now().isoformat(timespec="seconds"),
-        share_url=share_url,
+        share_url=local_share_url,
         allow_rules=[str(r) for r in acl.allow_rules],
         deny_rules=[str(r) for r in acl.deny_rules],
         token=token,
         http_log=http_log,
     )
 
-    save_service(service)
-    print_banner()
-    print_share_info(service, acl=acl, show_qr=not args.no_qr)
-
-    share_beacon = [{"name": name, "share_url": share_url, "listen_port": listen_port}]
+    started = False
 
     async def _run() -> None:
-        broadcast_task = asyncio.create_task(broadcast_presence(share_beacon))
-        try:
-            await run_proxy(
+        nonlocal started
+
+        loop = asyncio.get_running_loop()
+        proxy_ready: asyncio.Future[bool] = loop.create_future()
+        tunnel = None
+        broadcast_task = None
+
+        proxy_task = asyncio.create_task(
+            run_proxy(
                 target_host, target_port, listen_port,
                 acl           = acl,
                 token         = token,
                 http_log      = http_log,
                 on_connection = _on_connection if not http_log else None,
                 on_http       = _on_http if http_log else None,
+                on_ready      = proxy_ready,
             )
+        )
+
+        try:
+            done, _ = await asyncio.wait({proxy_task, proxy_ready}, return_when=asyncio.FIRST_COMPLETED)
+            if proxy_task in done and not proxy_ready.done():
+                await proxy_task
+            await proxy_ready
+
+            if args.tunnel:
+                tunnel = await start_cloudflare_tunnel(listen_port)
+                service.share_url = tunnel.public_url
+
+            save_service(service)
+            started = True
+
+            print_banner()
+            print_share_info(service, acl=acl, show_qr=not args.no_qr)
+            if args.tunnel:
+                console.print("  [dim]Tunnel provider:[/dim] cloudflare")
+                console.print(f"  [dim]Local URL:[/dim] {local_share_url}\n")
+
+            share_beacon = [{"name": name, "share_url": service.share_url, "listen_port": listen_port}]
+            broadcast_task = asyncio.create_task(broadcast_presence(share_beacon))
+            await proxy_task
         finally:
-            broadcast_task.cancel()
-            try:
-                await broadcast_task
-            except asyncio.CancelledError:
-                pass
+            if broadcast_task is not None:
+                broadcast_task.cancel()
+                try:
+                    await broadcast_task
+                except asyncio.CancelledError:
+                    pass
+            if tunnel is not None:
+                await tunnel.stop()
+            if not proxy_task.done():
+                proxy_task.cancel()
+                try:
+                    await proxy_task
+                except asyncio.CancelledError:
+                    pass
 
     try:
         asyncio.run(_run())
+    except TunnelError as e:
+        print_error(str(e))
+        sys.exit(1)
     except KeyboardInterrupt:
         pass
     finally:
-        remove_service(listen_port)
-        print_success(f"Stopped sharing {name}")
+        if started:
+            remove_service(listen_port)
+            print_success(f"Stopped sharing {name}")
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -210,6 +251,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Friendly name for this share")
     p_share.add_argument("--expose", action="store_true",
                          help="Use the same port as the target")
+    p_share.add_argument(
+        "--tunnel", action="store_true",
+        help="Create a public URL using Cloudflare Tunnel (auto-downloads cloudflared if missing)",
+    )
     p_share.add_argument("--no-qr", action="store_true",
                          help="Don't show QR code")
     p_share.add_argument(
