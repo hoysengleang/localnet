@@ -4,7 +4,7 @@
 
 **Instantly share local dev services with anyone on your network.**
 
-No tunneling. No cloud. No configuration. Just one command.
+LAN first, with optional Cloudflare Tunnel for public access.
 
 [![PyPI](https://img.shields.io/pypi/v/localnet-control?color=blue)](https://pypi.org/project/localnet-control/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
@@ -76,7 +76,10 @@ localnet share 3000 --port 9000            # listen on a different port
 localnet share 3000 --no-qr                # skip the QR code
 localnet share 3000 --http-log             # show live HTTP request log (method, path, status, latency)
 localnet share 3000 --token myteam123      # require token for access (see Token Auth below)
+localnet share 3000 --tunnel               # create a public URL via Cloudflare Tunnel
 ```
+
+`--tunnel` will auto-download `cloudflared` on first use if it is not already installed.
 
 **Access control:**
 
@@ -161,6 +164,7 @@ Displays your hostname, primary LAN IP, and all network interfaces.
 | `-n`, `--name` | Friendly name for this share |
 | `--expose` | Use the exact same port as the target |
 | `--no-qr` | Disable QR code output |
+| `--tunnel` | Create a public URL with Cloudflare Tunnel (auto-downloads `cloudflared` if missing) |
 | `--http-log` | Live HTTP request log (method, path, status, latency) |
 | `--token SECRET` | Require token; clients use `?token=SECRET` or `Authorization: Bearer SECRET` |
 | `--allow IP/CIDR` | Whitelist an IP or subnet (repeatable) |
@@ -189,8 +193,8 @@ Displays your hostname, primary LAN IP, and all network interfaces.
 3. **Bump version** in `pyproject.toml` and `src/localnet_access/__init__.py`
 4. **Push a tag:**
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 5. The GitHub Action will build and publish to PyPI.
 

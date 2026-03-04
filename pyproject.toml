@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localnet-control"
-version = "0.1.0"
-description = "Share local dev servers on your LAN — no tunnel, no config. TCP proxy with QR code, HTTP log, token auth."
+version = "0.2.0"
+description = "Share local dev servers on your LAN, with optional Cloudflare tunnel. TCP proxy with QR code, HTTP log, token auth."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
@@ -80,4 +80,3 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-

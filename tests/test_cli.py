@@ -1,6 +1,7 @@
 """Tests for CLI argument parsing."""
 
 import pytest
+
 from localnet_access.cli import build_parser
 
 
@@ -27,6 +28,10 @@ class TestParser:
     def test_share_no_qr(self):
         args = self.parser.parse_args(["share", "3000", "--no-qr"])
         assert args.no_qr is True
+
+    def test_share_tunnel(self):
+        args = self.parser.parse_args(["share", "3000", "--tunnel"])
+        assert args.tunnel is True
 
     def test_share_single_allow(self):
         args = self.parser.parse_args(["share", "3000", "--allow", "192.168.0.10"])
