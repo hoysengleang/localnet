@@ -193,8 +193,8 @@ Displays your hostname, primary LAN IP, and all network interfaces.
 3. **Bump version** in `pyproject.toml` and `src/localnet_access/__init__.py`
 4. **Push a tag:**
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 5. The GitHub Action will build and publish to PyPI.
 
