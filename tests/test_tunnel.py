@@ -3,6 +3,7 @@
 import os
 import stat
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -44,3 +45,72 @@ def test_ensure_cloudflared_downloads_when_missing(monkeypatch, tmp_path: Path):
     resolved = tunnel._ensure_cloudflared_binary()
     assert resolved == str(tmp_path / "cloudflared")
     assert os.access(resolved, os.X_OK)
+
+
+def test_is_unready_trycloudflare_response_detects_1033():
+    body = b"<html><body>Error 1033 Cloudflare Tunnel error unable to resolve it</body></html>"
+    assert tunnel._is_unready_trycloudflare_response(530, body)
+
+
+def test_is_unready_trycloudflare_response_ignores_other_status():
+    body = b"not important"
+    assert tunnel._is_unready_trycloudflare_response(404, body) is False
+
+
+def test_probe_public_url_ready_true_on_normal_response(monkeypatch):
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, _: int = -1):
+            return b"ok"
+
+    monkeypatch.setattr(tunnel, "urlopen", lambda *args, **kwargs: _Response())
+    assert tunnel._probe_public_url_ready("https://example.trycloudflare.com")
+
+
+def test_probe_public_url_ready_false_on_530_1033(monkeypatch):
+    class _FakeHTTPError(HTTPError):
+        def read(self, amt: int = -1):  # noqa: ARG002
+            return b"Error 1033 Cloudflare Tunnel error unable to resolve it"
+
+    def fake_urlopen_with_body(*args, **kwargs):
+        raise _FakeHTTPError(
+            url="https://example.trycloudflare.com",
+            code=530,
+            msg="Origin DNS error",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(tunnel, "urlopen", fake_urlopen_with_body)
+    assert tunnel._probe_public_url_ready("https://example.trycloudflare.com") is False
+
+
+def test_probe_public_url_ready_true_on_non_530_http_error(monkeypatch):
+    class _FakeHTTPError(HTTPError):
+        def read(self, amt: int = -1):  # noqa: ARG002
+            return b"unauthorized"
+
+    def fake_urlopen(*args, **kwargs):
+        raise _FakeHTTPError(
+            url="https://example.trycloudflare.com",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(tunnel, "urlopen", fake_urlopen)
+    assert tunnel._probe_public_url_ready("https://example.trycloudflare.com")
+
+
+def test_probe_public_url_ready_false_on_urlerror(monkeypatch):
+    def fake_urlopen(*args, **kwargs):
+        raise URLError("network down")
+
+    monkeypatch.setattr(tunnel, "urlopen", fake_urlopen)
+    assert tunnel._probe_public_url_ready("https://example.trycloudflare.com") is False

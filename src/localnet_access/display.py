@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from localnet_access import __version__
 from localnet_access.acl import AccessControl
 from localnet_access.proxy import HttpEntry, SharedService
 from localnet_access.scanner import RemoteShare
@@ -46,7 +47,7 @@ def print_banner() -> None:
     banner = Text()
     banner.append("  localnet", style="bold cyan")
     banner.append("-access", style="bold white")
-    banner.append("  v0.1.0\n", style="dim")
+    banner.append(f"  v{__version__}\n", style="dim")
     banner.append("  Share local services instantly on your network", style="italic dim")
     console.print(Panel(banner, border_style="cyan", padding=(0, 1)))
 

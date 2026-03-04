@@ -9,13 +9,16 @@ import stat
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 _TRY_CLOUDFLARE_URL_RE = re.compile(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com")
+_REGISTERED_CONNECTION_RE = re.compile(r"registered tunnel connection", re.IGNORECASE)
 _CLOUDFLARED_RELEASE_BASE = "https://github.com/cloudflare/cloudflared/releases/latest/download"
 _MANAGED_BIN_DIR = Path.home() / ".localnet-control" / "bin"
 _DOWNLOAD_TIMEOUT_SECS = 30
+_READINESS_PROBE_INTERVAL_SECS = 0.75
+_READINESS_MAX_WAIT_SECS = 12.0
 
 
 class TunnelError(RuntimeError):
@@ -148,6 +151,27 @@ def _ensure_cloudflared_binary() -> str:
     return str(managed_path)
 
 
+def _is_unready_trycloudflare_response(status_code: int, body: bytes) -> bool:
+    """Return True when Cloudflare indicates the tunnel hostname is not ready yet."""
+    if status_code != 530:
+        return False
+    text = body.decode("utf-8", errors="ignore").lower()
+    return "error 1033" in text or "cloudflare tunnel error" in text or "unable to resolve it" in text
+
+
+def _probe_public_url_ready(public_url: str) -> bool:
+    request = Request(public_url, headers={"User-Agent": "localnet-control/readiness-probe"})
+    try:
+        with urlopen(request, timeout=5) as response:
+            response.read(128)
+            return True
+    except HTTPError as exc:
+        body = exc.read(4096)
+        return not _is_unready_trycloudflare_response(exc.code, body)
+    except URLError:
+        return False
+
+
 async def start_cloudflare_tunnel(local_port: int, timeout: float = 20.0) -> TunnelHandle:
     cloudflared = await asyncio.to_thread(_ensure_cloudflared_binary)
 
@@ -162,7 +186,9 @@ async def start_cloudflare_tunnel(local_port: int, timeout: float = 20.0) -> Tun
     )
 
     loop = asyncio.get_running_loop()
+    start_time = loop.time()
     public_url_future: asyncio.Future[str] = loop.create_future()
+    tunnel_ready_future: asyncio.Future[None] = loop.create_future()
     recent_logs: deque[str] = deque(maxlen=8)
 
     async def _watch(stream: asyncio.StreamReader | None) -> None:
@@ -179,6 +205,8 @@ async def start_cloudflare_tunnel(local_port: int, timeout: float = 20.0) -> Tun
             match = _TRY_CLOUDFLARE_URL_RE.search(text)
             if match and not public_url_future.done():
                 public_url_future.set_result(match.group(0))
+            if _REGISTERED_CONNECTION_RE.search(text) and not tunnel_ready_future.done():
+                tunnel_ready_future.set_result(None)
 
     async def _watch_exit() -> None:
         code = await process.wait()
@@ -196,6 +224,35 @@ async def start_cloudflare_tunnel(local_port: int, timeout: float = 20.0) -> Tun
 
     try:
         public_url = await asyncio.wait_for(public_url_future, timeout=timeout)
+        if process.returncode is not None:
+            details = f"cloudflared exited with code {process.returncode}."
+            if recent_logs:
+                details += " Recent logs: " + " | ".join(recent_logs)
+            raise TunnelError(details)
+
+        elapsed = loop.time() - start_time
+        remaining = max(0.0, timeout - elapsed)
+        if remaining > 0 and not tunnel_ready_future.done():
+            try:
+                await asyncio.wait_for(tunnel_ready_future, timeout=min(5.0, remaining))
+            except asyncio.TimeoutError:
+                pass
+
+        elapsed = loop.time() - start_time
+        remaining = max(0.0, timeout - elapsed)
+        probe_budget = min(_READINESS_MAX_WAIT_SECS, remaining)
+        if probe_budget > 0:
+            probe_deadline = loop.time() + probe_budget
+            while True:
+                ready = await asyncio.to_thread(_probe_public_url_ready, public_url)
+                if ready:
+                    break
+                if loop.time() >= probe_deadline:
+                    raise TunnelError(
+                        "Cloudflare assigned a URL but it is not reachable yet "
+                        "(still returning temporary tunnel resolution errors)."
+                    )
+                await asyncio.sleep(_READINESS_PROBE_INTERVAL_SECS)
     except Exception as exc:
         if process.returncode is None:
             process.terminate()

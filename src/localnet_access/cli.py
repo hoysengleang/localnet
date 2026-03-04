@@ -151,6 +151,7 @@ def cmd_share(args: argparse.Namespace) -> None:
             print_share_info(service, acl=acl, show_qr=not args.no_qr)
             if args.tunnel:
                 console.print("  [dim]Tunnel provider:[/dim] cloudflare")
+                console.print(f"  [dim]Public URL:[/dim] {service.share_url}")
                 console.print(f"  [dim]Local URL:[/dim] {local_share_url}\n")
 
             share_beacon = [{"name": name, "share_url": service.share_url, "listen_port": listen_port}]
