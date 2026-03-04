@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import signal
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from localnet_access.acl import AccessControl
 
 SHARE_STATE_DIR = Path.home() / ".localnet-control"
+_TOKEN_COOKIE_NAME = "localnet_token"
+_COOKIE_SIGNING_SECRET = secrets.token_urlsafe(32)
 
 _NOT_HTTP = object()
 
@@ -154,6 +159,14 @@ def _get_content_length(raw: bytes) -> int | None:
         return None
 
 
+def _is_chunked_transfer(raw: bytes) -> bool:
+    """Return True if Transfer-Encoding includes chunked."""
+    val = _get_header(raw, "Transfer-Encoding")
+    if val is None:
+        return False
+    return any(part.strip().lower() == "chunked" for part in val.split(","))
+
+
 def _get_header(raw: bytes, name: str) -> str | None:
     """Extract a header value from raw HTTP bytes (case-insensitive)."""
     try:
@@ -177,20 +190,51 @@ def _check_token(raw_request: bytes, token: str) -> bool:
     if not token:
         return True
 
+    has_query_token, query_token = _extract_query_token(raw_request)
+    if has_query_token:
+        return query_token == token
+
     auth = _get_header(raw_request, "Authorization")
     if auth and auth == f"Bearer {token}":
         return True
 
+    if _has_token_cookie(raw_request, token):
+        return True
+
+    return False
+
+
+def _request_has_query_token(raw_request: bytes, token: str) -> bool:
+    """Return True when the request query string carries the expected token."""
+    has_query_token, query_token = _extract_query_token(raw_request)
+    return has_query_token and query_token == token
+
+
+def _extract_query_token(raw_request: bytes) -> tuple[bool, str | None]:
+    """Extract token query param. Returns (present, value)."""
     try:
         first_line = raw_request.split(b"\r\n", 1)[0].decode("latin-1")
         raw_path = first_line.split(" ", 2)[1]
         parsed = urlparse(raw_path)
-        params = parse_qs(parsed.query)
-        if params.get("token", [None])[0] == token:
-            return True
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            if key == "token":
+                return True, value
     except Exception:
-        pass
+        return False, None
+    return False, None
 
+
+def _has_token_cookie(raw_request: bytes, token: str) -> bool:
+    """Return True when Cookie header carries the expected localnet token."""
+    cookie_header = _get_header(raw_request, "Cookie")
+    if not cookie_header:
+        return False
+    for pair in cookie_header.split(";"):
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        if key.strip() == _TOKEN_COOKIE_NAME and _is_valid_signed_cookie(value.strip(), token):
+            return True
     return False
 
 
@@ -198,17 +242,116 @@ def _build_401_response() -> bytes:
     body = b'{"error": "Unauthorized. Provide a valid token."}'
     return (
         b"HTTP/1.1 401 Unauthorized\r\n"
-        b"Content-Type: application/json\r\n"
-        b"WWW-Authenticate: Bearer realm=\"localnet-control\"\r\n"
-        b"Connection: close\r\n"
-        b"Content-Length: " + str(len(body)).encode() + b"\r\n"
-        b"\r\n" + body
+        + b"Content-Type: application/json\r\n"
+        + b"WWW-Authenticate: Bearer realm=\"localnet-control\"\r\n"
+        + f"Set-Cookie: {_TOKEN_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0\r\n".encode("latin-1")
+        + b"Connection: close\r\n"
+        + b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+        + b"\r\n" + body
     )
+
+
+def _remove_token_from_path(path: str) -> str:
+    """Strip token from URL path query while keeping other query params."""
+    try:
+        parsed = urlparse(path)
+        filtered = [(k, v) for (k, v) in parse_qsl(parsed.query, keep_blank_values=True) if k != "token"]
+        clean_query = urlencode(filtered, doseq=True)
+        rebuilt = parsed._replace(query=clean_query)
+        return urlunparse(rebuilt) or "/"
+    except Exception:
+        return "/"
+
+
+def _build_token_cookie_redirect_response(location: str, token: str) -> bytes:
+    """Return a redirect response that sets auth cookie for browser follow-up requests."""
+    cookie_value = quote(_build_signed_cookie(token), safe="")
+    body = b'{"ok": true, "message": "Token accepted. Redirecting."}'
+    return (
+        b"HTTP/1.1 307 Temporary Redirect\r\n"
+        b"Content-Type: application/json\r\n"
+        + f"Location: {location}\r\n".encode("latin-1")
+        + f"Set-Cookie: {_TOKEN_COOKIE_NAME}={cookie_value}; Path=/; HttpOnly; SameSite=Lax\r\n".encode("latin-1")
+        + b"Cache-Control: no-store\r\n"
+        + b"Connection: close\r\n"
+        + b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+        + b"\r\n" + body
+    )
+
+
+def _cookie_sig(token: str) -> str:
+    return hmac.new(
+        _COOKIE_SIGNING_SECRET.encode("utf-8"),
+        token.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _build_signed_cookie(token: str) -> str:
+    return f"v1.{_cookie_sig(token)}"
+
+
+def _is_valid_signed_cookie(cookie_value: str, token: str) -> bool:
+    expected = _build_signed_cookie(token)
+    return hmac.compare_digest(cookie_value, expected)
 
 
 # ---------------------------------------------------------------------------
 # HTTP request/response reading
 # ---------------------------------------------------------------------------
+
+
+async def _read_chunked_until_end(
+    reader: asyncio.StreamReader,
+    buf: bytearray,
+    body_start: int,
+) -> int | None:
+    """Return end offset of a chunked body (including trailers), or None on parse failure."""
+    pos = body_start
+    while True:
+        line_end = buf.find(b"\r\n", pos)
+        while line_end == -1:
+            extra = await reader.read(8192)
+            if not extra:
+                return None
+            buf.extend(extra)
+            line_end = buf.find(b"\r\n", pos)
+
+        size_line = bytes(buf[pos:line_end]).split(b";", 1)[0].strip()
+        try:
+            chunk_size = int(size_line, 16)
+        except ValueError:
+            return None
+
+        pos = line_end + 2
+        if chunk_size == 0:
+            while True:
+                if len(buf) >= pos + 2 and buf[pos:pos + 2] == b"\r\n":
+                    return pos + 2
+
+                trailer_end = buf.find(b"\r\n\r\n", pos)
+                if trailer_end != -1:
+                    return trailer_end + 4
+
+                extra = await reader.read(8192)
+                if not extra:
+                    return None
+                buf.extend(extra)
+
+        need = pos + chunk_size + 2
+        while len(buf) < need:
+            extra = await reader.read(need - len(buf))
+            if not extra:
+                return None
+            buf.extend(extra)
+        if buf[pos + chunk_size:need] != b"\r\n":
+            return None
+        pos = need
+
+
+def _response_has_no_body(status: int) -> bool:
+    """Return True for status codes that must not carry a body."""
+    return (100 <= status < 200) or status in (204, 304)
 
 
 async def _read_one_http_request(reader: asyncio.StreamReader, buf: bytearray) -> bytes | None:
@@ -233,13 +376,19 @@ async def _read_one_http_request(reader: asyncio.StreamReader, buf: bytearray) -
         if not parsed:
             return None
 
-        body_len = _get_content_length(header_block)
-        total = header_end + 4 + (body_len or 0)
-        while len(buf) < total:
-            extra = await reader.read(total - len(buf))
-            if not extra:
-                break
-            buf.extend(extra)
+        body_start = header_end + 4
+        if _is_chunked_transfer(header_block):
+            total = await _read_chunked_until_end(reader, buf, body_start)
+            if total is None:
+                return None
+        else:
+            body_len = _get_content_length(header_block)
+            total = body_start + (body_len or 0)
+            while len(buf) < total:
+                extra = await reader.read(total - len(buf))
+                if not extra:
+                    break
+                buf.extend(extra)
 
         request = bytes(buf[:total])
         del buf[:total]
@@ -264,14 +413,31 @@ async def _read_one_http_response(reader: asyncio.StreamReader, buf: bytearray) 
 
         header_block = bytes(buf[: header_end + 4])
         status = _parse_status_line(header_block) or 0
-        body_len = _get_content_length(header_block)
-        total = header_end + 4 + (body_len if body_len is not None else 0)
-        while len(buf) < total:
-            extra = await reader.read(total - len(buf))
-            if not extra:
+        body_start = header_end + 4
+        if _response_has_no_body(status):
+            total = body_start
+        elif _is_chunked_transfer(header_block):
+            total = await _read_chunked_until_end(reader, buf, body_start)
+            if total is None:
+                return None
+        else:
+            body_len = _get_content_length(header_block)
+            if body_len is not None:
+                total = body_start + body_len
+                while len(buf) < total:
+                    extra = await reader.read(total - len(buf))
+                    if not extra:
+                        total = len(buf)
+                        break
+                    buf.extend(extra)
+            else:
+                # Fallback for connection-close framed responses.
+                while True:
+                    extra = await reader.read(65536)
+                    if not extra:
+                        break
+                    buf.extend(extra)
                 total = len(buf)
-                break
-            buf.extend(extra)
 
         response = bytes(buf[:total])
         del buf[:total]
@@ -323,13 +489,12 @@ async def _handle_http_client(
             break
 
         method, path = parsed
-
         if token and not _check_token(request, token):
             client_writer.write(_build_401_response())
             await client_writer.drain()
             if on_http:
                 on_http(HttpEntry(client_ip, method, path, 401, 0.0))
-            continue
+            break
 
         try:
             upstream_reader, upstream_writer = await asyncio.wait_for(
@@ -363,6 +528,105 @@ async def _handle_http_client(
         client_writer.close()
     except OSError:
         pass
+
+
+async def _handle_token_client(
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+    target_host: str,
+    target_port: int,
+    token: str,
+    on_http: Callable[[HttpEntry], None] | None,
+) -> None:
+    """Token gate for HTTP, then switch to transparent TCP piping.
+
+    This is more robust for tunnel/proxy paths that use keep-alive, upgrades,
+    or streaming after the initial authenticated request.
+    """
+    client_ip = "unknown"
+    peer = client_writer.get_extra_info("peername")
+    if peer:
+        client_ip = peer[0]
+
+    client_buf: bytearray = bytearray()
+    request = await _read_one_http_request(client_reader, client_buf)
+    if not request:
+        try:
+            client_writer.close()
+        except OSError:
+            pass
+        return
+
+    parsed = _parse_request_line(request)
+    if not parsed:
+        try:
+            client_writer.close()
+        except OSError:
+            pass
+        return
+
+    method, path = parsed
+    should_set_token_cookie = _request_has_query_token(request, token)
+    has_token_cookie = _has_token_cookie(request, token)
+
+    if token and not _check_token(request, token):
+        client_writer.write(_build_401_response())
+        await client_writer.drain()
+        if on_http:
+            on_http(HttpEntry(client_ip, method, path, 401, 0.0))
+        try:
+            client_writer.close()
+        except OSError:
+            pass
+        return
+
+    if should_set_token_cookie and not has_token_cookie:
+        redirect_target = _remove_token_from_path(path)
+        client_writer.write(_build_token_cookie_redirect_response(redirect_target, token))
+        await client_writer.drain()
+        if on_http:
+            on_http(HttpEntry(client_ip, method, path, 307, 0.0))
+        try:
+            client_writer.close()
+        except OSError:
+            pass
+        return
+
+    try:
+        upstream_reader, upstream_writer = await asyncio.wait_for(
+            asyncio.open_connection(target_host, target_port),
+            timeout=5,
+        )
+    except (OSError, asyncio.TimeoutError):
+        try:
+            client_writer.close()
+        except OSError:
+            pass
+        return
+
+    try:
+        upstream_writer.write(request)
+        if client_buf:
+            upstream_writer.write(bytes(client_buf))
+            client_buf.clear()
+        await upstream_writer.drain()
+
+        if on_http:
+            on_http(HttpEntry(client_ip, method, path, 0, 0.0))
+
+        await asyncio.gather(
+            _pipe(client_reader, upstream_writer),
+            _pipe(upstream_reader, client_writer),
+        )
+    except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+        try:
+            upstream_writer.close()
+        except OSError:
+            pass
+        try:
+            client_writer.close()
+        except OSError:
+            pass
 
 
 async def _handle_plain_client(
@@ -405,8 +669,9 @@ async def run_proxy(
 
     Args:
         acl:           IP access control rules.
-        token:         If set, require this token on every HTTP request.
-        http_log:      If True, parse HTTP and call on_http per request.
+        token:         If set, require this token on HTTP entry. After first auth,
+                       traffic is forwarded as a raw stream.
+        http_log:      If True and token is empty, parse HTTP and call on_http per request.
         on_connection: Callback(ip, allowed) for connection-level logging.
         on_http:       Callback(HttpEntry) for HTTP request logging.
     """
@@ -425,7 +690,9 @@ async def run_proxy(
         if on_connection:
             on_connection(client_ip, True)
 
-        if http_log or token:
+        if token:
+            await _handle_token_client(r, w, target_host, target_port, token, on_http)
+        elif http_log:
             await _handle_http_client(r, w, target_host, target_port, token, on_http)
         else:
             await _handle_plain_client(r, w, target_host, target_port)
