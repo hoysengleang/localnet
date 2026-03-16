@@ -24,13 +24,18 @@ class TestParseAclRule:
 
 class TestAccessControlPolicy:
     def test_no_rules_is_allow_all(self):
+        
         acl = AccessControl()
+        
         assert acl.policy == Policy.ALLOW_ALL
+        
         assert not acl.is_restricted
 
     def test_allow_rules_only_is_whitelist(self):
         acl = AccessControl(allow_rules=[parse_acl_rule("192.168.0.1")])
+        
         assert acl.policy == Policy.WHITELIST
+        
         assert acl.is_restricted
 
     def test_deny_rules_only_is_blacklist(self):
