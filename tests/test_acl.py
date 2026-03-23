@@ -107,10 +107,13 @@ class TestAccessControlIsAllowed:
     def test_multiple_deny_rules(self):
         acl = AccessControl(deny_rules=[
             parse_acl_rule("192.168.0.50"),
+            
             parse_acl_rule("192.168.0.51"),
         ])
         assert not acl.is_allowed("192.168.0.50")
+        
         assert not acl.is_allowed("192.168.0.51")
+        
         assert acl.is_allowed("192.168.0.1")
 
     def test_invalid_ip_is_denied(self):
